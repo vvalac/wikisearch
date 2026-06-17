@@ -1,8 +1,8 @@
 # WikiSearch
 
-A terminal chat app witten in and for MacOS that answers questions using Wikipedia, powered by Anthropic's Claude. Ask it anything — it searches Wikipedia, reads the relevant article, and returns a grounded answer with sources.
+A terminal chat app witten in and for MacOS that answers questions using Wikipedia, powered by Anthropic's Claude. Ask it anything — it searches Wikipedia, reads the relevant article, and returns a grounded answer with sources. The goal of this project was to maintain safety, helpfulness, and groundedness while reducing latency and cost.
 
-![WikiSearch TUI](eval/latency.png)
+![WikiSearch TUI](data/wikisearch-screenshot.png)
 
 ---
 
