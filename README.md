@@ -46,7 +46,7 @@ uv run python playground/push_prompts.py
 ## Running the app
 
 ```bash
-uv run python -m app
+uv run app/main.py
 ```
 
 Type any Wikipedia question and press Enter. A few commands are available in the app:
