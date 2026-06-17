@@ -1,19 +1,33 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import ClassVar
 
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import ScrollableContainer
 from textual.css.query import NoMatches
-from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import Footer, Header, Input, Label, LoadingIndicator, Markdown, Static
+from textual.widgets import Footer, Header, Input, Label, Markdown, Static
 
 from crab_facts import random_fact
 from models import WikiResponse
-from pipeline import CleanResult, HarmfulResult, MisuseResult, run_query
+from pipeline import Checkpoint, CleanResult, HarmfulResult, MisuseResult, run_query
 from pydantic_ai.messages import ModelMessage
+
+_EVAL_DIR = Path(__file__).parent.parent / "eval"
+
+_HELP_MD = """\
+**WikiSearch — commands**
+
+`/help` — show this message
+`/eval all` — run all eval prompts in the TUI
+`/eval harms` — run only harmful & misuse evals
+`/exit` — quit
+
+Ask any Wikipedia question to get started.
+"""
 
 _ORANGE = "#F26522"
 _ORANGE_DIM = "#7a3311"
@@ -27,11 +41,11 @@ _ORANGE_BG = "#2a1200"
 class CrabFact(Static):
     DEFAULT_CSS = f"""
     CrabFact {{
-        background: {_ORANGE_BG};
+        background: $surface;
         border: round {_ORANGE};
         margin: 1 2 0 2;
         padding: 0 2;
-        color: #aaaaaa;
+        color: #666666;
     }}
     """
 
@@ -49,6 +63,9 @@ class UserBubble(Widget):
         border: round {_ORANGE};
         height: auto;
     }}
+    UserBubble Label {{
+        width: 1fr;
+    }}
     UserBubble .sender {{
         color: {_ORANGE};
         text-style: bold;
@@ -63,43 +80,6 @@ class UserBubble(Widget):
         yield Label("You", classes="sender")
         yield Label(self._text, markup=False)
 
-
-class ThinkingBubble(Widget):
-    """Inline spinner shown while the pipeline is running. Replaced by AssistantBubble."""
-    DEFAULT_CSS = f"""
-    ThinkingBubble {{
-        margin: 0 20 1 1;
-        padding: 0 1;
-        background: $panel;
-        border: round $panel-lighten-2;
-        height: 3;
-        layout: horizontal;
-    }}
-    ThinkingBubble LoadingIndicator {{
-        width: 4;
-        height: 3;
-        color: {_ORANGE};
-    }}
-    ThinkingBubble #stage {{
-        height: 3;
-        width: 1fr;
-        content-align: left middle;
-        color: #aaaaaa;
-        padding-left: 1;
-    }}
-    """
-
-    status: reactive[str] = reactive("Checking safety…")
-
-    def compose(self) -> ComposeResult:
-        yield LoadingIndicator()
-        yield Label(self.status, id="stage")
-
-    def watch_status(self, value: str) -> None:
-        try:
-            self.query_one("#stage", Label).update(value)
-        except NoMatches:
-            pass
 
 
 class AssistantBubble(Widget):
@@ -160,6 +140,26 @@ class SystemMessage(Static):
         super().__init__(text, markup=False)
 
 
+class HelpMessage(Widget):
+    """Rendered help text for /help."""
+    DEFAULT_CSS = f"""
+    HelpMessage {{
+        margin: 1 2;
+        padding: 0 2;
+        border-left: thick {_ORANGE};
+        height: auto;
+    }}
+    HelpMessage Markdown {{
+        background: transparent;
+        padding: 0;
+        margin: 0;
+    }}
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Markdown(_HELP_MD)
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -175,6 +175,11 @@ class WikiSearchApp(App):
         height: 1fr;
         overflow-y: auto;
         padding-bottom: 1;
+    }}
+    #status {{
+        margin: 0 20 1 1;
+        padding: 0 2;
+        color: #aaaaaa;
     }}
     Input {{
         margin: 0 1 1 1;
@@ -198,7 +203,7 @@ class WikiSearchApp(App):
         yield Header()
         with ScrollableContainer(id="conversation"):
             yield CrabFact()
-        yield Input(placeholder="Ask a Wikipedia question…", id="query-input")
+        yield Input(placeholder="Ask a Wikipedia question… (type /help for commands)", id="query-input")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -215,9 +220,32 @@ class WikiSearchApp(App):
         if not query or self._input_locked:
             return
         event.input.clear()
+        if query.startswith("/"):
+            self._dispatch_slash(query)
+            return
         self._input_locked = True
         self._add_widget(UserBubble(query))
         self._run_pipeline(query)
+
+    def _dispatch_slash(self, raw: str) -> None:
+        parts = raw.strip().split()
+        cmd = parts[0].lower()
+        args = [p.lower() for p in parts[1:]]
+
+        if cmd == "/exit":
+            self.exit()
+        elif cmd == "/help":
+            self._add_widget(HelpMessage())
+        elif cmd == "/eval":
+            sub = args[0] if args else "all"
+            if sub not in ("all", "harms"):
+                self._add_widget(SystemMessage("Usage: /eval all  |  /eval harms"))
+                return
+            self._run_eval(sub)
+        else:
+            self._add_widget(SystemMessage(
+                f"Unknown command '{cmd}'. Type /help for available commands."
+            ))
 
     @work(exclusive=True)
     async def _run_pipeline(self, query: str) -> None:
@@ -238,17 +266,18 @@ class WikiSearchApp(App):
                 query = self._pending_harmful_query
                 skip_safety = True
 
-        thinking = ThinkingBubble()
-        self._add_widget(thinking)
         container = self.query_one("#conversation", ScrollableContainer)
+        status = Static("Checking safety…", id="status")
+        await container.mount(status)
+        container.scroll_end(animate=False)
 
         try:
-            outcome = await run_query(
-                query,
-                self._history,
-                skip_safety=skip_safety,
-                on_status=lambda text: setattr(thinking, "status", text),
-            )
+            outcome: CleanResult | MisuseResult | HarmfulResult | None = None
+            async for event in run_query(query, self._history, skip_safety=skip_safety):
+                if isinstance(event, Checkpoint):
+                    status.update(event.message)
+                else:
+                    outcome = event
 
             if isinstance(outcome, MisuseResult):
                 self._consecutive_misuse += 1
@@ -279,5 +308,79 @@ class WikiSearchApp(App):
                 self._add_widget(AssistantBubble(outcome.response))
 
         finally:
-            await thinking.remove()
+            await status.remove()
             container.scroll_end(animate=False)
+
+    @work(exclusive=True)
+    async def _run_eval(self, subcommand: str) -> None:
+        self._input_locked = True
+        try:
+            samples = [
+                json.loads(p.read_text())
+                for p in sorted(_EVAL_DIR.glob("*.json"))
+            ]
+            if subcommand == "harms":
+                samples = [
+                    s for s in samples
+                    if s["expected_safety"] in ("harmful", "misuse")
+                ]
+
+            self._add_widget(SystemMessage(
+                f"/eval {subcommand} — running {len(samples)} prompts…"
+            ))
+
+            results: list[dict] = []
+            container = self.query_one("#conversation", ScrollableContainer)
+
+            for sample in samples:
+                prompt = sample["prompt"]
+                expected = sample["expected_safety"]
+
+                self._add_widget(UserBubble(f"[eval] {prompt}"))
+
+                status = Static("Checking safety…", id="status")
+                await container.mount(status)
+                container.scroll_end(animate=False)
+
+                outcome: CleanResult | MisuseResult | HarmfulResult | None = None
+                try:
+                    async for event in run_query(prompt, []):
+                        if isinstance(event, Checkpoint):
+                            status.update(event.message)
+                        else:
+                            outcome = event
+                finally:
+                    await status.remove()
+
+                if isinstance(outcome, CleanResult):
+                    actual = "clean"
+                    self._add_widget(AssistantBubble(outcome.response))
+                elif isinstance(outcome, MisuseResult):
+                    actual = "misuse"
+                    self._add_widget(SystemMessage(f"Blocked (misuse): {outcome.safety_reason}"))
+                elif isinstance(outcome, HarmfulResult):
+                    actual = "harmful"
+                    self._add_widget(SystemMessage(f"Blocked (harmful): {outcome.safety_reason}"))
+                else:
+                    actual = "unknown"
+
+                results.append({
+                    "id": sample["id"],
+                    "expected": expected,
+                    "actual": actual,
+                    "match": actual == expected,
+                })
+
+            correct = sum(1 for r in results if r["match"])
+            lines = [f"Eval done — {correct}/{len(results)} correct"]
+            for r in results:
+                icon = "✓" if r["match"] else "✗"
+                lines.append(f"  {icon}  {r['id']}  (expected {r['expected']}, got {r['actual']})")
+            self._add_widget(SystemMessage("\n".join(lines)))
+
+        finally:
+            self._input_locked = False
+            try:
+                self.query_one("#query-input", Input).focus()
+            except NoMatches:
+                pass

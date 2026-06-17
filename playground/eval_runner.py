@@ -6,9 +6,12 @@ Each run writes:
   eval/latency.csv                — append-only latency tracker across all runs
 
 Usage:
-    uv run python playground/eval_runner.py
+    uv run python playground/eval_runner.py            # run all prompts
+    uv run python playground/eval_runner.py harms      # harmful + misuse only
+    uv run python playground/eval_runner.py clean      # clean prompts only
 """
 
+import argparse
 import asyncio
 import csv
 import json
@@ -29,7 +32,7 @@ Agent.instrument_all()
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
-from pipeline import CleanResult, HarmfulResult, MisuseResult, run_query  # type: ignore[import]  # noqa: E402
+from pipeline import Checkpoint, CleanResult, HarmfulResult, MisuseResult, run_query  # type: ignore[import]  # noqa: E402
 
 EVAL_DIR = Path(__file__).parent.parent / "eval"
 RUNS_DIR = EVAL_DIR / "runs"
@@ -46,21 +49,26 @@ async def run_sample(sample: dict) -> dict:
     print(f"\n[{prompt_id}]")
     print(f"Prompt: {prompt}")
 
+    outcome: CleanResult | MisuseResult | HarmfulResult | None = None
     t0 = time.perf_counter()
-    outcome = await run_query(prompt, [], on_status=lambda t: print(f"  → {t}"))
+    async for event in run_query(prompt, []):
+        if isinstance(event, Checkpoint):
+            print(f"  → {event.message}")
+        else:
+            outcome = event
     latency = round(time.perf_counter() - t0, 2)
 
     if isinstance(outcome, CleanResult):
         actual = "clean"
-        print(f"Answer: {outcome.response.answer}")
-        for url in outcome.response.sources:
+        print(f"Answer: {outcome.response.answer}")  # type: ignore[union-attr]
+        for url in outcome.response.sources: # type: ignore[union-attr]
             print(f"  {url}")
     elif isinstance(outcome, MisuseResult):
         actual = "misuse"
-        print(f"Reason: {outcome.safety_reason}")
+        print(f"Reason: {outcome.safety_reason}") # type: ignore[union-attr]
     elif isinstance(outcome, HarmfulResult):
         actual = "harmful"
-        print(f"Reason: {outcome.safety_reason}")
+        print(f"Reason: {outcome.safety_reason}") # type: ignore[union-attr]
     else:
         actual = "unknown"
 
@@ -73,8 +81,8 @@ async def run_sample(sample: dict) -> dict:
         "actual_safety": actual,
         "match": actual == expected,
         "latency_s": latency,
-        "answer": outcome.response.answer if isinstance(outcome, CleanResult) else None,
-        "sources": outcome.response.sources if isinstance(outcome, CleanResult) else [],
+        "answer": outcome.response.answer if isinstance(outcome, CleanResult) else None, # type: ignore[union-attr]
+        "sources": outcome.response.sources if isinstance(outcome, CleanResult) else [], # type: ignore[union-attr]
     }
 
 
@@ -103,9 +111,29 @@ def _append_latency(run_id: str, results: list[dict]) -> None:
     print(f"Latency   → {LATENCY_CSV.relative_to(Path.cwd())}")
 
 
+_SUBSET_FILTERS: dict[str, set[str]] = {
+    "all":    {"clean", "misuse", "harmful"},
+    "harms":  {"misuse", "harmful"},
+    "clean":  {"clean"},
+}
+
+
 async def main() -> None:
-    samples = [json.loads(p.read_text()) for p in sorted(EVAL_DIR.glob("*.json"))]
-    print(f"Running {len(samples)} eval samples…")
+    parser = argparse.ArgumentParser(description="WikiSearch eval runner")
+    parser.add_argument(
+        "subset",
+        nargs="?",
+        default="all",
+        choices=_SUBSET_FILTERS,
+        help="Which prompts to run (default: all)",
+    )
+    args = parser.parse_args()
+
+    allowed = _SUBSET_FILTERS[args.subset]
+    all_samples = [json.loads(p.read_text()) for p in sorted(EVAL_DIR.glob("*.json"))]
+    samples = [s for s in all_samples if s["expected_safety"] in allowed]
+
+    print(f"Running eval subset='{args.subset}' — {len(samples)} prompts…")
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     results = [await run_sample(s) for s in samples]

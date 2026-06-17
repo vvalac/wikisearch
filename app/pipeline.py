@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import AsyncGenerator, Callable
 
 import wikipediaapi
 from langfuse import get_client
@@ -23,8 +24,13 @@ def _fetch_page(title: str) -> WikiPage | None:
 
 
 # ---------------------------------------------------------------------------
-# Result types
+# Stream types
 # ---------------------------------------------------------------------------
+
+@dataclass
+class Checkpoint:
+    message: str
+
 
 @dataclass
 class CleanResult:
@@ -43,6 +49,7 @@ class HarmfulResult:
 
 
 QueryOutcome = CleanResult | MisuseResult | HarmfulResult
+StreamEvent = Checkpoint | QueryOutcome
 
 
 # ---------------------------------------------------------------------------
@@ -158,23 +165,38 @@ async def run_query(
     query: str,
     history: list[ModelMessage],
     skip_safety: bool = False,
-    on_status: Callable[[str], None] | None = None,
-) -> QueryOutcome:
+) -> AsyncGenerator[StreamEvent, None]:
     """
-    Full pipeline: safety filter → search → respond.
-    Returns a typed outcome; callers render it however they like.
+    Async generator: yields Checkpoint events then a final QueryOutcome.
+    Callers iterate with `async for` — each yield hands control back to the
+    event loop so UIs get a render slot between status updates.
     """
     with get_client().start_as_current_observation(name="wikisearch-query", input=query):
         if not skip_safety:
-            if on_status:
-                on_status("Checking safety…")
+            yield Checkpoint("Checking safety…")
             safety = await _filter_harm(query)
             if safety.category == "misuse":
-                return MisuseResult(safety_reason=safety.reason)
+                yield MisuseResult(safety_reason=safety.reason)
+                return
             if safety.category == "harmful":
-                return HarmfulResult(safety_reason=safety.reason)
+                yield HarmfulResult(safety_reason=safety.reason)
+                return
 
-        if on_status:
-            on_status("Thinking…")
-        response, new_history = await _process_query(query, history, on_status=on_status)
-        return CleanResult(response=response, new_history=new_history)
+        # Bridge on_status callbacks into the generator stream via a queue
+        # so Wikipedia search titles appear as checkpoints in real time.
+        status_q: asyncio.Queue[str] = asyncio.Queue()
+
+        def on_status(text: str) -> None:
+            status_q.put_nowait(text)
+
+        yield Checkpoint("Thinking…")
+        task = asyncio.create_task(_process_query(query, history, on_status=on_status))
+
+        while not task.done():
+            try:
+                yield Checkpoint(status_q.get_nowait())
+            except asyncio.QueueEmpty:
+                await asyncio.sleep(0)
+
+        response, new_history = await task
+        yield CleanResult(response=response, new_history=new_history)
