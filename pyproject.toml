@@ -1,7 +1,7 @@
 [project]
 name = "wikisearch"
 version = "0.1.0"
-description = "Add your description here"
+description = "Anthropic LLM-powered agentic chat tool that answers questions grounded in Wikipedia data"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [

@@ -30,7 +30,6 @@ Ask any Wikipedia question to get started.
 """
 
 _ORANGE = "#F26522"
-_ORANGE_DIM = "#7a3311"
 _ORANGE_BG = "#2a1200"
 
 
@@ -79,7 +78,6 @@ class UserBubble(Widget):
     def compose(self) -> ComposeResult:
         yield Label("You", classes="sender")
         yield Label(self._text, markup=False)
-
 
 
 class AssistantBubble(Widget):

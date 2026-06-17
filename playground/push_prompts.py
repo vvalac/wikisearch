@@ -7,16 +7,13 @@ Usage:
     uv run python playground/push_prompts.py
 """
 
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
-
+from langfuse import get_client
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from langfuse import get_client
+
 
 PROMPTS_DIR = Path(__file__).parent.parent / "app" / "prompts"
 

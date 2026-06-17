@@ -20,10 +20,6 @@ class SearchIteration(BaseModel):
     pages: list[WikiPage]
 
 
-class SearchOutput(BaseModel):
-    iterations: list[SearchIteration]
-
-
 class WikiResponse(BaseModel):
     answer: str
     sources: list[str] = []
