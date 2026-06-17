@@ -110,7 +110,7 @@ def _search_system_prompt() -> str:
 @_search_agent.tool
 async def search_wikipedia(ctx: RunContext[_SearchDeps], title: str) -> str:
     """Search Wikipedia for an article by title. Returns page content or a not-found message."""
-    if ctx.deps.attempt >= 2:
+    if ctx.deps.attempt >= 5:
         return "No relevant Wikipedia content found."
     ctx.deps.attempt += 1
     if ctx.deps.on_status:

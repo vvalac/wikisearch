@@ -14,9 +14,25 @@ from textual.widgets import Footer, Header, Input, Label, Markdown, Static
 from crab_facts import random_fact
 from models import WikiResponse
 from pipeline import Checkpoint, CleanResult, HarmfulResult, MisuseResult, run_query
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 
 _EVAL_DIR = Path(__file__).parent.parent / "eval"
+
+
+def _trim_history(messages: list[ModelMessage], keep: int = 10) -> list[ModelMessage]:
+    """Slice history to `keep` messages, then advance to the first real user turn.
+
+    A raw tail-slice can orphan a tool_result whose tool_use was cut off,
+    causing Anthropic's API to 400. Starting from a UserPromptPart guarantees
+    the history begins at a clean exchange boundary.
+    """
+    trimmed = messages[-keep:]
+    for i, msg in enumerate(trimmed):
+        if isinstance(msg, ModelRequest) and any(
+            isinstance(p, UserPromptPart) for p in msg.parts
+        ):
+            return trimmed[i:]
+    return trimmed
 
 _HELP_MD = """\
 **WikiSearch — commands**
@@ -302,7 +318,7 @@ class WikiSearchApp(App):
 
             elif isinstance(outcome, CleanResult):
                 self._consecutive_misuse = 0
-                self._history = outcome.new_history[-10:]
+                self._history = _trim_history(outcome.new_history)
                 self._add_widget(AssistantBubble(outcome.response))
 
         finally:
