@@ -13,7 +13,7 @@ from pydantic_ai import Agent
 load_dotenv()
 
 
-QUERY = "What is the largest ocean on Earth?"
+QUERY = "Which ocean is the largest in the world?"
 WIKI_PAGE = "Pacific Ocean"  # hardcoded for POC; in real app this comes from LLM tool call
 
 
@@ -80,7 +80,8 @@ async def main() -> None:
         system_prompt=(
             "You are WikiSearch. Answer the user's question using only the Wikipedia "
             "content provided. Be concise and factual. Always populate 'sources' with "
-            "the URLs of any Wikipedia articles you drew from."
+            "the URLs of any Wikipedia articles you drew from. Be helpful but avoid "
+            "being overly verbose. Simple questions should have simple answers."
         ),
     )
 
