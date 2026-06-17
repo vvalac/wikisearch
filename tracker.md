@@ -5,4 +5,11 @@ Day 1:
 15 minutes: create main app, fix TUI issues
 
 Day 2:
-Bug fixes, testing, eval samples built
+20 minutes Bug fixes, testing, eval samples built
+40 minutes Bug fixes, TUI issues, LangFuse integration
+20 minutes safety exploration and tuning
+40 minutes tuning prompts and pipeline
+20 minutes ok more tuning, can we use haiku for the filter
+
+complete.
+
