@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import AsyncGenerator, Callable
 
 import wikipediaapi
-from langfuse import get_client
+from langfuse import get_client, observe
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelMessage
 
@@ -57,7 +57,7 @@ StreamEvent = Checkpoint | QueryOutcome
 # ---------------------------------------------------------------------------
 
 _safety_agent: Agent[None, SafetyResult] = Agent(
-    model="anthropic:claude-sonnet-4-6",
+    model="anthropic:claude-haiku-4-5",
     output_type=SafetyResult,
     defer_model_check=True,
 )
@@ -68,10 +68,12 @@ def _safety_system_prompt() -> str:
     return get_prompt("safety-filter")
 
 
+@observe(as_type="generation", name="safety-filter")
 async def _filter_harm(query: str) -> SafetyResult:
-    with get_client().start_as_current_observation(name="safety-filter", as_type="span"):
-        result = await _safety_agent.run(query)
-        return result.output
+    prompt = get_client().get_prompt("safety-filter")
+    get_client().update_current_generation(prompt=prompt)
+    result = await _safety_agent.run(query)
+    return result.output
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +84,7 @@ async def _filter_harm(query: str) -> SafetyResult:
 class _MainDeps:
     on_status: Callable[[str], None] | None
     iterations: list[SearchIteration] = field(default_factory=list)
+    searches_done: int = 0
 
 
 @dataclass
@@ -107,6 +110,8 @@ def _search_system_prompt() -> str:
 @_search_agent.tool
 async def search_wikipedia(ctx: RunContext[_SearchDeps], title: str) -> str:
     """Search Wikipedia for an article by title. Returns page content or a not-found message."""
+    if ctx.deps.attempt >= 2:
+        return "No relevant Wikipedia content found."
     ctx.deps.attempt += 1
     if ctx.deps.on_status:
         ctx.deps.on_status(f"Searching Wikipedia: '{title}'…")
@@ -120,7 +125,10 @@ async def search_wikipedia(ctx: RunContext[_SearchDeps], title: str) -> str:
     return f"Title: {page.title}\nURL: {page.url}\n\n{page.summary}"
 
 
+@observe(as_type="generation", name="search-agent")
 async def _run_search(query: str, deps: _MainDeps) -> str:
+    prompt = get_client().get_prompt("search-agent")
+    get_client().update_current_generation(prompt=prompt)
     search_deps = _SearchDeps(on_status=deps.on_status)
     result = await _search_agent.run(query, deps=search_deps)
     deps.iterations.extend(search_deps.iterations)
@@ -143,18 +151,23 @@ def _main_system_prompt() -> str:
 @_main_agent.tool
 async def wikipedia_search(ctx: RunContext[_MainDeps], query: str) -> str:
     """Search Wikipedia for relevant content. Pass the best article title as query."""
+    if ctx.deps.searches_done >= 1:
+        return "Search limit reached. Synthesise an answer from the content already retrieved."
+    ctx.deps.searches_done += 1
     return await _run_search(query, ctx.deps)
 
 
+@observe(as_type="generation", name="main-agent")
 async def _process_query(
     query: str,
     history: list[ModelMessage],
     on_status: Callable[[str], None] | None = None,
 ) -> tuple[WikiResponse, list[ModelMessage]]:
-    with get_client().start_as_current_observation(name="pipeline", as_type="span"):
-        deps = _MainDeps(on_status=on_status)
-        result = await _main_agent.run(query, message_history=history, deps=deps)
-        return result.output, result.all_messages()
+    prompt = get_client().get_prompt("main-agent")
+    get_client().update_current_generation(prompt=prompt)
+    deps = _MainDeps(on_status=on_status)
+    result = await _main_agent.run(query, message_history=history, deps=deps)
+    return result.output, result.all_messages()
 
 
 # ---------------------------------------------------------------------------

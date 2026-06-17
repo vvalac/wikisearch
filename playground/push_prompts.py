@@ -25,8 +25,17 @@ def main() -> None:
     client = get_client()
     for path in sorted(PROMPTS_DIR.glob("*.txt")):
         name = path.stem
-        content = path.read_text().strip()
-        client.create_prompt(name=name, type="text", prompt=content, labels=["production"])
+        local = path.read_text().strip()
+
+        try:
+            remote = client.get_prompt(name, label="production").compile()
+            if remote == local:
+                print(f"unchanged: {name}")
+                continue
+        except Exception:
+            pass  # prompt doesn't exist yet
+
+        client.create_prompt(name=name, type="text", prompt=local, labels=["production"])
         print(f"pushed: {name}")
 
 
