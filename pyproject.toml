@@ -4,8 +4,13 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
+
+[project.scripts]
+wikisearch = "app.main:run"
+
 dependencies = [
     "pydantic-ai[anthropic]>=1.107.0",
     "python-dotenv>=1.2.2",
+    "textual>=8.2.7",
     "wikipedia-api>=0.15.0",
 ]
