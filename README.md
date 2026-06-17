@@ -10,6 +10,7 @@ A terminal chat app witten in and for MacOS that answers questions using Wikiped
 
 ### 1. Homebrew
 If you don't have Homebrew, install it from [brew.sh](https://brew.sh). It's a one-line command in your terminal.
+Execute the follow-on instructions in your terminal after Homebrew installs to add it to your path.
 
 ### 2. Python & UV
 WikiSearch uses [UV](https://docs.astral.sh/uv/) to manage Python and dependencies.
@@ -29,13 +30,13 @@ You need accounts and API keys for two services:
 | [Anthropic](https://console.anthropic.com) | Powers the AI | Console → API Keys |
 | [LangFuse](https://cloud.langfuse.com) | Tracing & prompt management | Settings → API Keys |
 
-Once you have them, copy the file called `.env.sample` and rename to be `.env`. Place your keys in that file accordingly. 
+Once you have them, copy the file called `.env.sample` and rename it to be `.env`. Place your keys in that file accordingly. 
 
 ```
 
 ### 4. Prompts
 
-WikiSearch pulls its prompts from LangFuse, but has local fallbacks. Push them once before running the app:
+WikiSearch pulls its prompts from LangFuse, but has local fallbacks. If you want to see traces, push them once before running the app:
 
 ```bash
 uv run python playground/push_prompts.py
@@ -44,6 +45,8 @@ uv run python playground/push_prompts.py
 ---
 
 ## Running the app
+
+From within the wikisearch directory, run:
 
 ```bash
 uv run app/main.py
