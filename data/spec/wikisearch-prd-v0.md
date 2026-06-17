@@ -2,32 +2,80 @@
 ## PRD for v0
 
 #### Vision Statement
-WikiSearch is an Anthropic LLM-powered, agentic chat tool that answers generic user questions grounded in Wikipedia-based data. It is written in python, and operated via a simple anthropic-themed (orange, pixel art crab, etc) TUI. It is designed for simple question and answering, not long-horizon chatbot tasks. It only answers questions via a search of Wikipedia data and refuses any other use case.
+WikiSearch is an Anthropic LLM-powered, agentic chat tool that answers generic user questions grounded in Wikipedia-based data. It is written in Python and operated via a simple Anthropic-themed (orange, pixel art crab) TUI. It is designed for simple question-and-answering with natural follow-up support — not long-horizon, free-flowing chat. It only answers questions via a search of Wikipedia data and refuses all other use cases.
 
 #### Safety Statement
-WikiSearch is primarily designed to be HELPFUL. Understanding that Wikipedia could have some harmful information, the user is always prompted that a query may contain harmful information and permission is requested before completing a harmful query.
-All AI systems are subject to potential abuse. Input to the system is parsed before it is fully processed and rejected if misuse is observed.
+WikiSearch is primarily designed to be HELPFUL. Understanding that Wikipedia could contain some harmful information, the user is prompted that a query may contain harmful content and permission is requested before completing such a query. Input is parsed before full processing and rejected if misuse is detected.
 
 #### Technology
-WikiSearch is written in Python and operated via the command line. It is primarily targeted toward MacOS devices and is not designed to work on Windows. The TUI is written using textual. The environment is managed with UV.
-API access is required to pull results from Wikipedia via the Wikimedia API. The python library, Wikipedia-API may be used instead of curling the Wikimedia API directly.
-An architecture diagram is shown in wikisearch-diagram-v0.png.
-Traceability and evaluation is handled via LangFuse.
+WikiSearch is written in Python and operated via the command line. It is primarily targeted toward macOS and is not designed for Windows. The TUI is built with Textual. The environment is managed with UV.
+
+The Wikipedia-API Python library is used to query Wikipedia (via the Wikimedia API). Pydantic-AI is used for all LLM-powered steps. LangFuse handles traceability and evaluation.
+
+An architecture diagram is provided in `wikisearch-diagram-v0.png`.
+
+---
 
 ##### Process Flow
-1. A user asks an initial question (initial query step)
-2. The question is sent as-written to an independent safety filter. The filter is prompted to detect misuse (prompt injection, platform abuse such as asking for coding support, etc) and harms. (harms filter step)
-2.a. If classified as misuse, the system politely rejects. The user is reminded of the use case for WikiSearch and asked to try again, possibly rephrasing their question.
-2.b. If classified as harms, the user is prompted to agree to view harmful content. If the user declines, a message is sent that is courteous and states that the query has been canceled. If the user agrees, the message is sent forward to the process query step. (user permission check step)
-3. The process query step is the main LLM-powered step in the flow. It rephrases the user's question if necessary, and calls the search_wikipedia tool to retrieve grounded information.
-4. The search_wikipedia step returns a pydantic base model with relevant wikipedia results and their associated sources. There may be more than one result. The tool leverages a small model to determine if results are relevant, and can trigger additional searches, up to three times before it is forced to return data to the primary workflow.
-5. The process_response step takes in as context the user's original query and data from search_wikipedia to craft a grounded answer to the user's question. The response is sent as a pydantic base model that includes the response and grounded sources. The sources are linked in such a way that a user may navigate to wikipedia and view the grounding information independently.
+
+**1. Initial Query**
+The user types a question into the TUI. The TUI displays a status indicator while each downstream step is running.
+
+**2. filter_harm (Safety Filter)**
+The query is sent as-written to an independent LLM call that classifies it into one of three categories:
+
+- **Misuse** (prompt injection, off-topic requests such as coding help, platform abuse): The system politely rejects the query and informs the user of WikiSearch's intended use case, asking them to rephrase. This is allowed once per session turn. If the very next message is also classified as misuse, the session is fully terminated and the user is asked to restart.
+- **Harmful** (content that could be dangerous or sensitive): The user is asked for explicit permission to proceed. If they decline, the query is canceled with a courteous message. If they agree, the query advances to step 3.
+- **Clean**: The query advances immediately to step 3.
+
+**3. process_query (Main Workflow Agent)**
+The primary Pydantic-AI agent step. It rephrases the user's question if necessary for better search results, then calls `search_wikipedia` as a tool. This agent operates with conversation history scoped to the last 5–10 messages, enabling natural follow-up questions without requiring context condensation.
+
+**4. search_wikipedia (Sub-Agent Tool)**
+`search_wikipedia` is exposed as a tool to `process_query` but is implemented internally as a Pydantic-AI sub-agent running a smaller model (Sonnet by default; Haiku is the target once evals confirm quality parity). It operates with a fixed maximum number of turns (3) to prevent runaway loops.
+
+Each turn, the sub-agent:
+- Issues a Wikipedia search via the Wikipedia-API library
+- Evaluates relevance of the returned results
+- Decides whether to search again (rephrasing or refining the query) or return
+
+All search iterations are accumulated in an array, each entry containing the search query, raw results, and source URLs. This full array is returned to `process_query` as a Pydantic base model.
+
+**5. process_response**
+Takes as context the user's original query and the accumulated Wikipedia results from `search_wikipedia`. Produces a grounded answer as a Pydantic base model containing:
+- The response text
+- The Wikipedia sources consulted, formatted as navigable links so the user can independently verify the information
+
+---
+
+##### TUI Behavior
+
+- **On load**: Display a random fun fact about crabs.
+- **Conversation**: Single scrollable conversation pane. No sidebar. No persistent conversation history panel (out of scope for v0).
+- **Status indicators**: Visible, real-time indicators for each step in the pipeline (e.g., "Checking safety…", "Searching Wikipedia…", "Thinking…"). Wikipedia searches must be clearly surfaced to the user as they happen.
+- **Sources**: Every response includes the Wikipedia sources that were consulted, displayed as clickable links.
+- **Conversation length**: Scoped to 5–10 messages. This is a deliberate POC constraint — no context condensation is required.
+
+---
 
 ##### Evals and Observability
-WikiSearch uses Pydantic-AI for its primary functionality. Pydantic base models are used to enforce schema . LangFuse is integrated in such a way that full system traces are parsed each time the workflow is run. LangFuse spans are tagged in such a way that it is obvious to a layperson what is being tracked where. A binary scoring system is set for final output looking at two criteria:
+
+WikiSearch uses LangFuse for full system tracing. Every pipeline run generates a trace with clearly labeled spans (readable by a layperson). A binary scoring rubric is applied to final output on two criteria:
 1. Is the output helpful?
-2. Is the output grounded with wiki data?
-When a golden example is observed by human operators, the JSON output of that run will be stored in the eval/golden_samples directory. A set of 10 prompts, in JSON format, will be stored in the eval parent folder for apples-to-apples repeated testing. At least one of these prompts will include harms, and at least one will include misuse, in order to test filters.
+2. Is the output grounded in Wikipedia data?
+
+When a golden example is validated by a human operator, its JSON output is stored in `eval/golden_samples/`. A set of 10 test prompts (JSON) is stored in `eval/` for repeatable apples-to-apples testing. At least one prompt tests harmful content handling; at least one tests misuse detection.
+
+The initial target model for `search_wikipedia`'s relevance-checking sub-agent is Sonnet, chosen to ensure quality out of the box. Haiku is the intended long-term target; evals will determine when that downgrade is safe.
+
+---
 
 ##### Directory Structure
-The WikiSearch directory is set up to have an app folder where primary functionality exists. A data folder holds samples of wikipedia data output and spec information like this PRD and any associated workflow diagrams. An eval folder holds golden samples once they exist, and a set of 10 prompts that can be rerun repeatedly.
+
+```
+app/       # primary application code
+data/
+  spec/    # PRD and architecture diagram
+eval/
+  golden_samples/   # human-validated golden run outputs
+```
