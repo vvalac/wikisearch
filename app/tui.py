@@ -12,7 +12,7 @@ from textual.widgets import Footer, Header, Input, Label, LoadingIndicator, Mark
 
 from crab_facts import random_fact
 from models import WikiResponse
-from pipeline import filter_harm, process_query
+from pipeline import CleanResult, HarmfulResult, MisuseResult, run_query
 from pydantic_ai.messages import ModelMessage
 
 _ORANGE = "#F26522"
@@ -82,6 +82,7 @@ class ThinkingBubble(Widget):
     }}
     ThinkingBubble #stage {{
         height: 3;
+        width: 1fr;
         content-align: left middle;
         color: #aaaaaa;
         padding-left: 1;
@@ -230,23 +231,26 @@ class WikiSearchApp(App):
                 pass
 
     async def _pipeline(self, query: str) -> None:
-        # Handle harm confirmation from a previous turn
+        skip_safety = False
         if self._awaiting_harm_confirm:
+            self._awaiting_harm_confirm = False
             if query.strip().lower() == "yes":
                 query = self._pending_harmful_query
-            self._awaiting_harm_confirm = False
+                skip_safety = True
 
-        # Inline thinking indicator appears immediately
         thinking = ThinkingBubble()
         self._add_widget(thinking)
         container = self.query_one("#conversation", ScrollableContainer)
 
         try:
-            # Step 2 — safety filter
-            thinking.status = "Checking safety…"
-            safety = await filter_harm(query)
+            outcome = await run_query(
+                query,
+                self._history,
+                skip_safety=skip_safety,
+                on_status=lambda text: setattr(thinking, "status", text),
+            )
 
-            if safety.category == "misuse":
+            if isinstance(outcome, MisuseResult):
                 self._consecutive_misuse += 1
                 if self._consecutive_misuse >= 2:
                     self._add_widget(SystemMessage(
@@ -260,30 +264,19 @@ class WikiSearchApp(App):
                     "WikiSearch only answers factual questions grounded in Wikipedia. "
                     "Please rephrase your question."
                 ))
-                return
 
-            if safety.category == "harmful":
+            elif isinstance(outcome, HarmfulResult):
                 self._pending_harmful_query = query
                 self._awaiting_harm_confirm = True
                 self._add_widget(SystemMessage(
                     "This question may involve sensitive content. "
                     "Reply 'yes' to proceed anyway, or rephrase your question."
                 ))
-                return
 
-            self._consecutive_misuse = 0
-
-            # Steps 3–5 — search + respond
-            thinking.status = "Thinking…"
-
-            def on_status(text: str) -> None:
-                thinking.status = text
-
-            response, new_history, _ = await process_query(
-                query, self._history, on_status=on_status
-            )
-            self._history = new_history[-10:]
-            self._add_widget(AssistantBubble(response))
+            elif isinstance(outcome, CleanResult):
+                self._consecutive_misuse = 0
+                self._history = outcome.new_history[-10:]
+                self._add_widget(AssistantBubble(outcome.response))
 
         finally:
             await thinking.remove()

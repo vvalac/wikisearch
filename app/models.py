@@ -25,4 +25,4 @@ class SearchOutput(BaseModel):
 
 class WikiResponse(BaseModel):
     answer: str
-    sources: list[str]
+    sources: list[str] = []
