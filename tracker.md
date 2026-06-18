@@ -10,6 +10,7 @@ Day 2:
 20 minutes safety exploration and tuning
 40 minutes tuning prompts and pipeline
 20 minutes ok more tuning, can we use haiku for the filter
+10 minutes - bug fixing and polish after Rachel tried it
 
 complete.
 
