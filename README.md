@@ -32,15 +32,15 @@ You need accounts and API keys for two services:
 
 Once you have them, copy the file called `.env.sample` and rename it to be `.env`. Place your keys in that file accordingly. 
 
-```
 
 ### 4. Prompts
 
-WikiSearch pulls its prompts from LangFuse, but has local fallbacks. If you want to see traces, push them once before running the app:
+WikiSearch pulls its prompts from LangFuse, but has local fallbacks. If you want to see traces, push the prompts before running the app:
 
 ```bash
 uv run python playground/push_prompts.py
 ```
+The prompts will be versioned in LangFuse, so feel free to experiment and revert back to basline easily.
 
 ---
 
