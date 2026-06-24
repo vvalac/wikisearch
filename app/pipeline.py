@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import warnings
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, Callable
 
@@ -9,10 +11,11 @@ from langfuse import get_client, observe
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelMessage
 
-from models import SafetyResult, SearchIteration, WikiPage, WikiResponse
+from models import SafetyResult, SearchIteration, WikiFact, WikiPage, WikiResponse, WikiSearchResult
 from prompts import get as get_prompt
 
-_USER_AGENT = "wikisearch/0.1 (adamscook@gmail.com)"
+_contact = os.getenv("WIKI_USER_AGENT_CONTACT", "")
+_USER_AGENT = f"wikisearch/0.1 ({_contact})" if _contact else "wikisearch/0.1"
 _wiki = wikipediaapi.Wikipedia(user_agent=_USER_AGENT, language="en")
 
 
@@ -94,9 +97,9 @@ class _SearchDeps:
     attempt: int = 0
 
 
-_search_agent: Agent[_SearchDeps, str] = Agent(
+_search_agent: Agent[_SearchDeps, WikiSearchResult] = Agent(
     model="anthropic:claude-sonnet-4-6",
-    output_type=str,
+    output_type=WikiSearchResult,
     deps_type=_SearchDeps,
     defer_model_check=True,
 )
@@ -126,13 +129,23 @@ async def search_wikipedia(ctx: RunContext[_SearchDeps], title: str) -> str:
 
 
 @observe(as_type="generation", name="search-agent")
-async def _run_search(query: str, deps: _MainDeps) -> str:
+async def _run_search(plan: str, deps: _MainDeps) -> str:
     prompt = get_client().get_prompt("search-agent")
     get_client().update_current_generation(prompt=prompt)
     search_deps = _SearchDeps(on_status=deps.on_status)
-    result = await _search_agent.run(query, deps=search_deps)
+    result = await _search_agent.run(plan, deps=search_deps)
     deps.iterations.extend(search_deps.iterations)
-    return result.output
+
+    search_result: WikiSearchResult = result.output
+    verified: list[WikiFact] = [f for f in search_result.facts if f.source]
+    dropped = len(search_result.facts) - len(verified)
+    if dropped:
+        warnings.warn(f"search-agent returned {dropped} fact(s) without a source URL — dropped before synthesis")
+
+    if not verified:
+        return "No relevant Wikipedia content found."
+
+    return "\n\n".join(f"[{i}] {f.summary}\n    Source: {f.source}" for i, f in enumerate(verified, 1))
 
 
 _main_agent: Agent[_MainDeps, WikiResponse] = Agent(
@@ -149,12 +162,12 @@ def _main_system_prompt() -> str:
 
 
 @_main_agent.tool
-async def wikipedia_search(ctx: RunContext[_MainDeps], query: str) -> str:
-    """Search Wikipedia for relevant content. Pass the best article title as query."""
+async def wikipedia_search(ctx: RunContext[_MainDeps], plan: str) -> str:
+    """Execute a multi-step Wikipedia research plan. Pass a numbered list of up to 5 lookups as `plan`."""
     if ctx.deps.searches_done >= 1:
-        return "Search limit reached. Synthesise an answer from the content already retrieved."
+        return "Search already completed. Synthesise an answer from the content already retrieved."
     ctx.deps.searches_done += 1
-    return await _run_search(query, ctx.deps)
+    return await _run_search(plan, ctx.deps)
 
 
 @observe(as_type="generation", name="main-agent")

@@ -20,6 +20,15 @@ class SearchIteration(BaseModel):
     pages: list[WikiPage]
 
 
+class WikiFact(BaseModel):
+    summary: str
+    source: str | None = None  # None when the model fails to supply a URL; filtered before main agent sees it
+
+
+class WikiSearchResult(BaseModel):
+    facts: list[WikiFact]
+
+
 class WikiResponse(BaseModel):
     answer: str
     sources: list[str] = []
